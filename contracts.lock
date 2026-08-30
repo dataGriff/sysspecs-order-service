@@ -1,3 +1,3 @@
 # contract pin - version is the spec repo's release tag, sha its commit
-version: orders/v3.1.0
-sha: 6c4e1fc2e735f2491fe67c7f31390ced024d5d2a
+version: orders/v3.2.0
+sha: 957d7b4c77e475e821122db086301c0eaac436eb

@@ -51,19 +51,7 @@ task contracts:verify \
 endpoint must carry a path (`/events`): the Microcks WebSocket consumer
 rejects a bare `ws://host:port` with "no suitable MessageConsumptionTask".
 
-Two departures from the current implement-service skill, both because the
-`orders/v3.1.0` pin predates it: the pinned Taskfile names the contract-test
-task `mocks:contract` (not `contract:test`), and the pinned kit has no
-`sysspec null run`, so the same falsifiability gate lives in
-[`scripts/null-run.js`](scripts/null-run.js) - the whole suite must fail
-against a service that answers `200 {}` to everything.
-
-## Known red gate
-
-The schemathesis step currently fails with exactly one finding:
-`POST /orders` returns `400` for invalid orders - which the pinned feature
-file *requires* (scenario outline "Orders must have at least one valid
-line") - but the pinned OpenAPI documents only `201` and `409`. That is a
-conflict between two gated artifacts and is raised as a spec-repo change
-(document the 400) rather than worked around here. The gate goes green when
-a release tag carrying that fix lands in `contracts.lock`.
+All four gates come from the pinned spec repo toolchain: Microcks contract
+tests, the strict bound feature suite, the null-service falsifiability gate
+(the whole suite must fail against a service answering `200 {}` to
+everything), and schemathesis schema fuzzing.

@@ -21,14 +21,9 @@ tasks:
   contracts:verify:
     desc: The definition of done - run with the implementation up (BASE_URL, REST_ENDPOINT, ASYNC_ENDPOINT)
     cmds:
-      # The orders/v3.1.0 pin names the contract-test task mocks:contract
-      # (later spec repo versions call it contract:test).
-      - task -d .contracts mocks:contract SERVICE={{.SERVICE}} REST_ENDPOINT={{.REST_ENDPOINT}} ASYNC_ENDPOINT={{.ASYNC_ENDPOINT}}
+      - task -d .contracts contract:test SERVICE={{.SERVICE}} REST_ENDPOINT={{.REST_ENDPOINT}} ASYNC_ENDPOINT={{.ASYNC_ENDPOINT}}
       - BASE_URL={{.BASE_URL}} npx cucumber-js .contracts/specs/{{.SERVICE}}/features --require steps/
-      # Falsifiability gate. The pinned kit predates `sysspec null run`, so
-      # the same check lives in scripts/null-run.js: the whole suite must
-      # fail against a service that answers 200 {} to everything.
-      - BASE_URL=http://localhost:9099 node scripts/null-run.js --port 9099 --results {{.ROOT_DIR}}/.null-results.json -- npx cucumber-js {{.ROOT_DIR}}/.contracts/specs/{{.SERVICE}}/features --require {{.ROOT_DIR}}/steps/ --format json:{{.ROOT_DIR}}/.null-results.json
+      - BASE_URL=http://localhost:9099 task -d .contracts null:run RESULTS={{.ROOT_DIR}}/.null-results.json -- npx cucumber-js {{.ROOT_DIR}}/.contracts/specs/{{.SERVICE}}/features --require {{.ROOT_DIR}}/steps/ --format json:{{.ROOT_DIR}}/.null-results.json
       - uvx schemathesis run .contracts/specs/{{.SERVICE}}/openapi/*.yaml --url {{.BASE_URL}}
 
   install:
