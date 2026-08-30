@@ -1,0 +1,7 @@
+.contracts/
+.null-results.json
+node_modules/
+dist/
+data/
+*.log
+.schemathesis/

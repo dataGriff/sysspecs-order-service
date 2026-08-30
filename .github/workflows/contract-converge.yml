@@ -1,0 +1,135 @@
+# Installed into the implementation repo by the implement-service skill
+# (step 6). Replace every orders with the service name and every
+# hungovercoders/sysspec with the spec repo's owner/repo when copying.
+#
+# The pull half of the contract sync loop: Renovate bumps contracts.lock
+# when the spec repo tags a new orders/v<x.y.z>; this workflow runs the
+# deterministic gates against the new pin and wakes an agent ONLY when
+# they are red. Green minors auto-merge with no agent involved.
+#
+# Assumes the repo carries `task contracts:fetch` (pin fetcher) and
+# `task contracts:verify` (contract tests + strict features + null-service
+# negative control + schemathesis, resolved against .contracts/) as defined
+# in the skill's step 2.
+#
+# One-time setup:
+#   - ANTHROPIC_API_KEY actions secret, Claude GitHub App installed (its
+#     pushes retrigger this workflow; plain GITHUB_TOKEN pushes would not,
+#     silently freezing the loop)
+#   - repo setting "Allow auto-merge" on; branch protection on main
+#     requiring the `converge` check (platformAutomerge in renovate.json
+#     then merges green bumps regardless of who pushed last)
+#
+# Behaviour notes:
+#   - This run FAILS whenever the gates are red, even after dispatching the
+#     agent - the red status on the current head is what stops auto-merge
+#     from racing the agent's push. The agent's push creates a new head
+#     whose own run decides.
+#   - Renovate stops rebasing a branch once a foreign commit lands on it,
+#     so the agent and Renovate never fight over the branch.
+#   - One agent attempt per external push: if HEAD already carries the
+#     [contract-converge] marker and the gates are still red, the workflow
+#     labels the PR contract-converge-failed and stops instead of looping.
+name: contract-converge
+on:
+  pull_request:
+    paths: ["contracts.lock"]
+
+concurrency:
+  group: contract-converge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Verify the lock against the spec tag
+        id: lock
+        run: |
+          version=$(awk '/^version:/{print $2}' contracts.lock)
+          sha=$(awk '/^sha:/{print $2}' contracts.lock)
+          tag_sha=$(git ls-remote https://github.com/hungovercoders/sysspec "refs/tags/$version" | cut -f1)
+          [ -n "$tag_sha" ] || { echo "::error::tag $version does not exist in the spec repo"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$sha" = "$tag_sha" ]; then
+            echo "sha_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            # Lightweight tags make the tag sha the commit sha, so a mismatch
+            # means the lock digest is stale or wrong - red; the agent fixes
+            # the sha line (never the version) and pushes.
+            echo "::warning::lock sha $sha != tag commit $tag_sha"
+            echo "sha_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: jdx/mise-action@v2
+
+      - name: Fetch pinned contracts and run the gates
+        id: gates
+        if: steps.lock.outputs.sha_ok == 'true'
+        continue-on-error: true
+        run: |
+          task contracts:fetch
+          task contracts:verify
+
+      - name: Done - gates green on this pin
+        if: steps.lock.outputs.sha_ok == 'true' && steps.gates.outcome == 'success'
+        run: echo "implementation satisfies ${{ steps.lock.outputs.version }}"
+
+      - name: Loop guard - one agent attempt per external push
+        if: steps.lock.outputs.sha_ok != 'true' || steps.gates.outcome != 'success'
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git log -1 --format=%B | grep -q "\[contract-converge\]"; then
+            gh pr edit ${{ github.event.pull_request.number }} --add-label contract-converge-failed
+            gh pr comment ${{ github.event.pull_request.number }} \
+              --body "contract-converge: the agent's attempt did not turn the gates green - see this run's logs. Converge manually or push a fix; the next external push gets one fresh agent attempt."
+            echo "spent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "spent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.guard.outputs.spent == 'false'
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: "--allowedTools Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            The contract pin for the orders service this repo implements
+            has been bumped to ${{ steps.lock.outputs.version }} and the
+            deterministic gates are red. Converge the implementation - update,
+            never regenerate.
+
+            1. If the verify step reported a lock sha mismatch, correct ONLY
+               the sha line of contracts.lock to the tag's commit sha
+               (git ls-remote the spec repo for refs/tags/${{ steps.lock.outputs.version }}).
+               Never change the version line.
+            2. Run `task contracts:fetch`, then diff .contracts/ against the
+               previous pin (fetch it from the base branch's contracts.lock)
+               to scope your changes; leave everything the contract diff does
+               not touch alone.
+            3. Update this implementation minimally until
+               `task contracts:verify` is green. Never edit anything under
+               .contracts/, never weaken tests, never disable strict feature
+               binding.
+            4. Commit (conventional message ending with the marker
+               [contract-converge]) and push to this same branch. Your push
+               retriggers the gates on the new head.
+            5. If you cannot make the gates green, still commit and push what
+               is safe, and say exactly which checks fail and why in the
+               commit body. Never force a green result.
+
+      - name: Report red - the converged head's own run decides
+        if: steps.lock.outputs.sha_ok != 'true' || steps.gates.outcome != 'success'
+        run: exit 1

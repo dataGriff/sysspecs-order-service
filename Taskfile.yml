@@ -1,0 +1,47 @@
+version: '3'
+
+vars:
+  SERVICE: orders
+  SPECS_REPO: hungovercoders/sysspec
+
+tasks:
+  contracts:fetch:
+    desc: Fetch the pinned contract surface and its toolchain into read-only .contracts/
+    cmds:
+      - |
+        sha=$(awk '/^sha:/{print $2}' contracts.lock)
+        chmod -R u+w .contracts 2>/dev/null || true
+        rm -rf .contracts && git init -q .contracts
+        git -C .contracts remote add origin https://github.com/{{.SPECS_REPO}}
+        git -C .contracts sparse-checkout set specs/{{.SERVICE}} mocks kit
+        git -C .contracts fetch -q --depth 1 origin "$sha"
+        git -C .contracts checkout -q FETCH_HEAD
+        chmod -R a-w .contracts/specs
+
+  contracts:verify:
+    desc: The definition of done - run with the implementation up (BASE_URL, REST_ENDPOINT, ASYNC_ENDPOINT)
+    cmds:
+      # The orders/v3.1.0 pin names the contract-test task mocks:contract
+      # (later spec repo versions call it contract:test).
+      - task -d .contracts mocks:contract SERVICE={{.SERVICE}} REST_ENDPOINT={{.REST_ENDPOINT}} ASYNC_ENDPOINT={{.ASYNC_ENDPOINT}}
+      - BASE_URL={{.BASE_URL}} npx cucumber-js .contracts/specs/{{.SERVICE}}/features --require steps/
+      # Falsifiability gate. The pinned kit predates `sysspec null run`, so
+      # the same check lives in scripts/null-run.js: the whole suite must
+      # fail against a service that answers 200 {} to everything.
+      - BASE_URL=http://localhost:9099 node scripts/null-run.js --port 9099 --results {{.ROOT_DIR}}/.null-results.json -- npx cucumber-js {{.ROOT_DIR}}/.contracts/specs/{{.SERVICE}}/features --require {{.ROOT_DIR}}/steps/ --format json:{{.ROOT_DIR}}/.null-results.json
+      - uvx schemathesis run .contracts/specs/{{.SERVICE}}/openapi/*.yaml --url {{.BASE_URL}}
+
+  install:
+    desc: Install dependencies
+    cmds:
+      - npm ci
+
+  start:
+    desc: Run the orders service (PORT, EVENTS_PORT, ORDERS_DB env to override)
+    cmds:
+      - npx tsx src/server.ts
+
+  typecheck:
+    desc: Typecheck the implementation
+    cmds:
+      - npx tsc --noEmit
