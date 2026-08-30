@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Contract pin updates for a sysspec implementation. Copy into the implementation repo and replace every orders with the service name and every hungovercoders/sysspec with the spec repo's owner/repo: sed -i '' -e 's/orders/orders/g' -e 's|hungovercoders/sysspec|hungovercoders/sysspec|g' renovate.json. One-time setup: install the Renovate app and enable 'Allow auto-merge' on the repo, with branch protection requiring the contract-converge check.",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^contracts\\.lock$/"],
+      "matchStrings": [
+        "version: orders\\/v(?<currentValue>[0-9.]+)\\s+sha: (?<currentDigest>[a-f0-9]{40})"
+      ],
+      "depNameTemplate": "sysspec/orders",
+      "packageNameTemplate": "https://github.com/hungovercoders/sysspec",
+      "datasourceTemplate": "git-tags",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^orders/v(?<version>.+)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["sysspec/orders"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "matchDepNames": ["sysspec/orders"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["contract-major"]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+# Fetch the pinned contract surface and hold the implementation to it -
+# the same loop as local development: contracts:fetch, start the service,
+# contracts:verify. Nothing exists only in CI.
+name: ci
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+
+      - name: Fetch pinned contracts
+        run: task contracts:fetch
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start the orders service
+        run: |
+          rm -rf data
+          (npx tsx src/server.ts > service.log 2>&1 &)
+          for i in $(seq 1 30); do
+            curl -fsS localhost:3000/healthz > /dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          echo "service never became healthy"; cat service.log; exit 1
+
+      - name: Start the Microcks stack
+        run: task -d .contracts mocks:up
+
+      - name: Verify against the pinned contracts
+        run: |
+          # Microcks runs in containers; the service runs on the runner, so
+          # the containers reach it via the compose network's gateway. The
+          # async endpoint needs a path - the Microcks WebSocket consumer
+          # rejects a bare ws://host:port.
+          gw=$(docker network inspect mocks_default --format '{{(index .IPAM.Config 0).Gateway}}')
+          task contracts:verify \
+            BASE_URL=http://localhost:3000 \
+            REST_ENDPOINT=http://$gw:3000 \
+            ASYNC_ENDPOINT=ws://$gw:3001/events
+
+      - name: Teardown
+        if: always()
+        run: task -d .contracts mocks:down || true
+
+      - name: Service log
+        if: always()
+        run: tail -100 service.log || true
