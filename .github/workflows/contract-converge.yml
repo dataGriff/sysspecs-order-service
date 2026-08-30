@@ -77,9 +77,24 @@ jobs:
         id: gates
         if: steps.lock.outputs.sha_ok == 'true'
         continue-on-error: true
+        # contracts:verify holds the RUNNING implementation to the pinned
+        # surface (implement-service skill, step 4), so start it first -
+        # the same startup and endpoint split as ci.yml.
         run: |
           task contracts:fetch
-          task contracts:verify
+          npm ci
+          rm -rf data
+          (npx tsx src/server.ts > service.log 2>&1 &)
+          for i in $(seq 1 30); do
+            curl -fsS localhost:3000/healthz > /dev/null 2>&1 && break
+            sleep 1
+          done
+          task -d .contracts mocks:up
+          gw=$(docker network inspect mocks_default --format '{{(index .IPAM.Config 0).Gateway}}')
+          task contracts:verify \
+            BASE_URL=http://localhost:3000 \
+            REST_ENDPOINT=http://$gw:3000 \
+            ASYNC_ENDPOINT=ws://$gw:3001/events
 
       - name: Done - gates green on this pin
         if: steps.lock.outputs.sha_ok == 'true' && steps.gates.outcome == 'success'
