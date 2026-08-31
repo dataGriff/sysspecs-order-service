@@ -13,9 +13,13 @@
 # in the skill's step 2.
 #
 # One-time setup:
-#   - ANTHROPIC_API_KEY actions secret, Claude GitHub App installed (its
-#     pushes retrigger this workflow; plain GITHUB_TOKEN pushes would not,
-#     silently freezing the loop)
+#   - ONE Claude credential as an actions secret - ANTHROPIC_API_KEY
+#     (Claude Console, pay-per-token) or CLAUDE_CODE_OAUTH_TOKEN (from
+#     `claude setup-token`, uses your Claude subscription). The API key
+#     wins when both are set; the run fails with a clear error only when
+#     the agent is needed and neither exists. Claude GitHub App installed
+#     (its pushes retrigger this workflow; plain GITHUB_TOKEN pushes would
+#     not, silently freezing the loop)
 #   - repo setting "Allow auto-merge" on; branch protection on main
 #     requiring the `converge` check (platformAutomerge in renovate.json
 #     then merges green bumps regardless of who pushed last)
@@ -115,10 +119,29 @@ jobs:
             echo "spent=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve Claude credential - API key first, then OAuth token
+        id: auth
+        if: steps.guard.outputs.spent == 'false'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "mode=api-key" >> "$GITHUB_OUTPUT"
+            echo "using ANTHROPIC_API_KEY (Console, pay-per-token)"
+          elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
+            echo "using CLAUDE_CODE_OAUTH_TOKEN (Claude subscription)"
+          else
+            echo "::error::the converge agent needs a Claude credential and none is configured - add an actions secret: ANTHROPIC_API_KEY (Claude Console, pay-per-token) or CLAUDE_CODE_OAUTH_TOKEN (run 'claude setup-token', uses your Claude subscription)"
+            exit 1
+          fi
+
       - uses: anthropics/claude-code-action@v1
         if: steps.guard.outputs.spent == 'false'
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ steps.auth.outputs.mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ steps.auth.outputs.mode == 'oauth' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           claude_args: "--allowedTools Bash,Edit,Write,Read,Glob,Grep"
           prompt: |
             The contract pin for the orders service this repo implements
